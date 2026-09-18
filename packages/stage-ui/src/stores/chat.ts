@@ -18,6 +18,7 @@ import { getConversationAnalyticsSurface } from '../composables'
 import { useAiriRuntimePrompt } from '../composables/use-airi-runtime-prompt'
 import { activeTurnSpan, startSpan } from '../composables/use-io-tracer'
 import { extractMessageText, isCloudSyncableMessage } from '../libs/chat-sync'
+import { SOVEREIGN_PROFILE } from '../libs/sovereign-profile'
 import { createChatAnalyticsHooks, getProviderMode } from '../libs/product-signals/events/chat'
 import {
   AIRI_CHAT_APP_SURFACE_HEADER,
@@ -28,6 +29,7 @@ import { useLLM } from './ai/chat-llm/llm'
 import { resolveLlmTools } from './ai/chat-llm/tool-resolver'
 import { useLlmToolsStore } from './ai/chat-llm/tools'
 import { useLlmToolsetPromptsStore } from './ai/chat-llm/toolset-prompts'
+import { createSovereignSeams } from '@sovereign/bridge'
 import { useAuthStore } from './auth'
 import { createMinecraftContext, createRuntimePromptContext, createUserAccountContext } from './chat/context-providers'
 import { useChatContextStore } from './chat/context-store'
@@ -173,9 +175,22 @@ export const useChatStore = defineStore('chat', () => {
   const pendingQueuedSendCount = shallowRef(0)
   let ownedActiveTurnSpan: typeof activeTurnSpan.value
   let stopLeadershipListener: (() => void) | undefined
-  const analyticsHooks = createChatAnalyticsHooks({
-    getSessionMessages: sessionId => chatSession.getSessionMessages(sessionId),
+
+  // ── Sovereign Core bridge (M1) ──────────────────────────────────────────
+  // The vault is her: soul supplement + vault recall feed AIRI's seams, and
+  // committed exchanges are journaled by the core. Every call is loopback and
+  // error-swallowed — if the core is down, AIRI runs exactly as upstream.
+  const sovereign = createSovereignSeams({
+    port: 8700,
+    getSessionId: () => activeSessionId.value,
   })
+  const lastSovereignQuery = shallowRef<string>()
+
+  const analyticsHooks = SOVEREIGN_PROFILE
+    ? {} as ReturnType<typeof createChatAnalyticsHooks>
+    : createChatAnalyticsHooks({
+        getSessionMessages: sessionId => chatSession.getSessionMessages(sessionId),
+      })
 
   /**
    * Initializes chat state and binds local consumers to synchronized leadership.
@@ -317,10 +332,18 @@ export const useChatStore = defineStore('chat', () => {
     },
     getActiveSessionId: () => activeSessionId.value,
     getActiveProvider: () => activeProvider.value,
-    getSystemPromptSupplement: () => llmToolsetPromptsStore.activeToolsetPrompt,
+    // Sovereign M1: soul identity (CONSTITUTION + PERSONA) leads the supplement;
+    // the toolset prompt still applies. Immutable-first ordering is preserved
+    // because the core's supplement is itself KV-cache-stable.
+    getSystemPromptSupplement: () =>
+      [sovereign.getSystemPromptSupplement(), llmToolsetPromptsStore.activeToolsetPrompt]
+        .filter(Boolean)
+        .join('\n\n') || undefined,
     runtimeContextProviders: [
       () => createRuntimePromptContext(runtimePrompt.value),
       createMinecraftContext,
+      // Vault recall with provenance, matched against the last user message.
+      sovereign.runtimeContextProvider(() => lastSovereignQuery.value),
     ],
     createId: nanoid,
     unwrapMessage: message => toRaw(message),
@@ -330,6 +353,8 @@ export const useChatStore = defineStore('chat', () => {
     onLifecycle: record => contextObservability.recordLifecycle(record),
     onPromptProjection: payload => contextObservability.capturePromptProjection(payload),
     onUserMessageAppended: ({ sessionId, message, messageText, source, model, provider, roundId, turnIndex }) => {
+      // Sovereign M1: remember what the user asked so vault recall can match it.
+      lastSovereignQuery.value = messageText
       analyticsHooks.onUserMessageAppended?.({
         sessionId,
         message,
@@ -340,7 +365,7 @@ export const useChatStore = defineStore('chat', () => {
         roundId,
         turnIndex,
       })
-      if (isCloudSyncableMessage(message)) {
+      if (!SOVEREIGN_PROFILE && isCloudSyncableMessage(message)) {
         void chatSession.pushMessageToCloud(sessionId, {
           id: message.id,
           role: 'user',
@@ -350,7 +375,7 @@ export const useChatStore = defineStore('chat', () => {
       }
     },
     onAssistantMessageAppended: ({ sessionId, message }) => {
-      if (isCloudSyncableMessage(message) && message.id) {
+      if (!SOVEREIGN_PROFILE && isCloudSyncableMessage(message) && message.id) {
         void chatSession.pushMessageToCloud(sessionId, {
           id: message.id,
           role: 'assistant',
@@ -364,6 +389,8 @@ export const useChatStore = defineStore('chat', () => {
         void artistryAutonomousStore.runArtistTask(messageText, toProviderHistory(sessionMessages))
     },
     onAssistantTurnReady: ({ messageText, sessionMessages }) => {
+      // Sovereign M1: journal the closed exchange into the vault (error-swallowed).
+      sovereign.onAssistantTurnReady({ messageText, sessionMessages })
       const artistry = cardStore.activeCard?.extensions?.airi?.modules?.artistry
       if (artistry?.autonomousEnabled && artistry?.autonomousTarget === 'assistant')
         void artistryAutonomousStore.runArtistTask(messageText, toProviderHistory(sessionMessages))
