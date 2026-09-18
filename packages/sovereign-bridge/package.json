@@ -1,11 +1,14 @@
 {
   "name": "@sovereign/bridge",
-  "version": "0.1.0",
   "type": "module",
+  "version": "0.1.0",
   "description": "AIRI ↔ Sovereign Core bridge (M1). Loopback-only client for the vault's HTTP surface. This package lives in the AIRI fork; see docs/M0-M1-changelist.md for the exact chat.ts wiring.",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "main": "src/index.ts",
   "scripts": {
     "live-test": "node ../../scripts/m1_bridge_live_test.ts"
-  },
-  "license": "Apache-2.0"
+  }
 }

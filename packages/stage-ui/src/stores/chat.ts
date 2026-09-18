@@ -9,7 +9,9 @@ import type { ToolCallRerunPayload } from './tool-call-rerun'
 
 import { errorMessageFrom } from '@moeru/std'
 import { createChatOrchestratorRuntime, renderConversationPreview } from '@proj-airi/core-agent'
+import { ContextUpdateStrategy } from '@proj-airi/server-sdk'
 import { IOAttributes, IOEvents, IOSpanNames, IOSubsystems } from '@proj-airi/stage-shared'
+import { createSovereignSeams } from '@sovereign/bridge'
 import { nanoid } from 'nanoid'
 import { defineStore, storeToRefs } from 'pinia'
 import { shallowRef, toRaw } from 'vue'
@@ -18,18 +20,17 @@ import { getConversationAnalyticsSurface } from '../composables'
 import { useAiriRuntimePrompt } from '../composables/use-airi-runtime-prompt'
 import { activeTurnSpan, startSpan } from '../composables/use-io-tracer'
 import { extractMessageText, isCloudSyncableMessage } from '../libs/chat-sync'
-import { SOVEREIGN_PROFILE } from '../libs/sovereign-profile'
 import { createChatAnalyticsHooks, getProviderMode } from '../libs/product-signals/events/chat'
 import {
   AIRI_CHAT_APP_SURFACE_HEADER,
   AIRI_CHAT_ROUND_ID_HEADER,
   AIRI_CHAT_SESSION_ID_HEADER,
 } from '../libs/product-signals/headers'
+import { SOVEREIGN_PROFILE } from '../libs/sovereign-profile'
 import { useLLM } from './ai/chat-llm/llm'
 import { resolveLlmTools } from './ai/chat-llm/tool-resolver'
 import { useLlmToolsStore } from './ai/chat-llm/tools'
 import { useLlmToolsetPromptsStore } from './ai/chat-llm/toolset-prompts'
-import { createSovereignSeams } from '@sovereign/bridge'
 import { useAuthStore } from './auth'
 import { createMinecraftContext, createRuntimePromptContext, createUserAccountContext } from './chat/context-providers'
 import { useChatContextStore } from './chat/context-store'
@@ -343,7 +344,19 @@ export const useChatStore = defineStore('chat', () => {
       () => createRuntimePromptContext(runtimePrompt.value),
       createMinecraftContext,
       // Vault recall with provenance, matched against the last user message.
-      sovereign.runtimeContextProvider(() => lastSovereignQuery.value),
+      // The bridge returns plain content; we type it as a ContextMessage here.
+      () => {
+        const vaultContext = sovereign.runtimeContextProvider(() => lastSovereignQuery.value)()
+        if (!vaultContext)
+          return null
+        return {
+          id: nanoid(),
+          contextId: vaultContext.contextId,
+          strategy: ContextUpdateStrategy.ReplaceSelf,
+          text: vaultContext.text,
+          createdAt: Date.now(),
+        }
+      },
     ],
     createId: nanoid,
     unwrapMessage: message => toRaw(message),
