@@ -52,6 +52,8 @@ export interface AIRISeamEvent {
 }
 
 export interface SovereignSeams {
+  /** Load identity and recall before the synchronous AIRI prompt hooks run. */
+  prepareTurn: (query: string) => Promise<void>
   /** for `getSystemPromptSupplement?: () => string | undefined` */
   getSystemPromptSupplement: () => string | undefined
   /** for `runtimeContextProviders` — caller wraps into ContextMessage. */
@@ -68,9 +70,26 @@ export interface CreateSovereignSeamsOptions {
   timeoutMs?: number
   recallTokens?: number
   getSessionId?: () => string
+  token?: string
 }
 
 export const SOVEREIGN_CONTEXT_ID = 'system:sovereign-vault'
+
+export interface SovereignRequest {
+  method: 'GET' | 'POST'
+  path: string
+  body?: unknown
+  timeoutMs: number
+}
+
+export type SovereignTransport = (request: SovereignRequest) => Promise<unknown>
+
+let hostTransport: SovereignTransport | undefined
+
+/** Desktop registers its main-process Eventa transport before chat starts. */
+export function configureSovereignTransport(transport: SovereignTransport): void {
+  hostTransport = transport
+}
 
 function assertLoopback(host: string): void {
   const ok
@@ -87,22 +106,29 @@ function assertLoopback(host: string): void {
 export class SovereignClient {
   readonly baseUrl: string
   private readonly timeoutMs: number
+  private readonly token?: string
 
-  constructor(options: { host?: string, port?: number, timeoutMs?: number } = {}) {
+  constructor(options: { host?: string, port?: number, timeoutMs?: number, token?: string } = {}) {
     const host = options.host ?? '127.0.0.1'
     const port = options.port ?? 8700
     assertLoopback(host)
     this.baseUrl = `http://${host}:${port}`
     this.timeoutMs = options.timeoutMs ?? 30_000
+    this.token = options.token
   }
 
-  private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async call<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+    if (hostTransport)
+      return await hostTransport({ method, path, body, timeoutMs: this.timeoutMs }) as T
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), this.timeoutMs)
     try {
       const res = await fetch(this.baseUrl + path, {
         method,
-        headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+        headers: {
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
       })
@@ -135,20 +161,52 @@ export class SovereignClient {
     return memories
   }
 
-  /** M2 mode: the mind owns the whole turn. */
-  turn(text: string, sessionId?: string): Promise<TurnResponse> {
-    return this.call('POST', '/v1/turns', { text, session_id: sessionId })
+  /** M2 mode: the mind owns the whole turn. Aborting prevents its commit. */
+  async turn(text: string, sessionId?: string, signal?: AbortSignal): Promise<TurnResponse> {
+    const requestId = crypto.randomUUID()
+    if (signal?.aborted)
+      throw signal.reason ?? new Error('turn cancelled')
+    const pending = this.call<TurnResponse>('POST', '/v1/turns', {
+      text,
+      session_id: sessionId,
+      request_id: requestId,
+    })
+    if (!signal)
+      return pending
+    let onAbort: () => void = () => {}
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => {
+        void this.call('POST', '/v1/turns/cancel', { request_id: requestId }).catch(() => {})
+        reject(signal.reason ?? new Error('turn cancelled'))
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      if (signal.aborted)
+        onAbort()
+    })
+    try {
+      return await Promise.race([pending, aborted])
+    }
+    finally {
+      signal.removeEventListener('abort', onAbort)
+    }
   }
 
   /** M1 mode: AIRI generated the reply; the core journals the exchange. */
   commitTurn(userText: string, assistantText: string, sessionId?: string): Promise<{
     trace_id: string
     journal: string
+    intents?: Array<{ type: string, payload: Record<string, unknown> }>
   }> {
     return this.call('POST', '/v1/turns/commit', {
       user_text: userText,
       assistant_text: assistantText,
       session_id: sessionId,
+    }).then((r) => {
+      // The mind→body boundary (plan §23): every committed exchange fans its
+      // intents out to subscribed bodies (stage adapter, webchat, …).
+      if (r.intents?.length)
+        emitSovereignIntents(r.intents)
+      return r
     })
   }
 
@@ -183,25 +241,40 @@ export function createSovereignSeams(
 ): SovereignSeams {
   const client = new SovereignClient(options)
   const recallTokens = options.recallTokens ?? 6
-  let cached: string | undefined
-  let cacheQuery = ''
+  let cachedSupplement: string | undefined
+  const recalled = new Map<string, string>()
+
+  const prepareTurn = async (query: string): Promise<void> => {
+    const clean = query.trim()
+    const [supplement, memories] = await Promise.allSettled([
+      client.supplement(),
+      clean ? client.recall(clean, recallTokens) : Promise.resolve([]),
+    ])
+    if (supplement.status === 'fulfilled')
+      cachedSupplement = supplement.value
+    if (memories.status === 'fulfilled' && clean) {
+      recalled.set(clean, formatMemories(memories.value))
+      if (recalled.size > 8) {
+        const oldest = recalled.keys().next().value
+        if (oldest !== undefined)
+          recalled.delete(oldest)
+      }
+    }
+  }
 
   const seams: SovereignSeams = {
-    getSystemPromptSupplement: () => cached,
+    prepareTurn,
+    getSystemPromptSupplement: () => cachedSupplement,
 
     runtimeContextProvider: getLastUserText => () => {
       const q = getLastUserText()
       if (!q?.trim())
         return null
-      // AIRI's provider contract is synchronous: the recall matching the
-      // PREVIOUS turn's topic is injected (one-turn lag); the fetch refreshes
-      // the cache in the background for the next turn.
-      void client.recall(q, recallTokens).then((memories) => {
-        cached = formatMemories(memories)
-        cacheQuery = q
-      }).catch(() => { /* mind unreachable → AIRI runs unspoiled */ })
-      if (!cached || cacheQuery !== q)
+      const cached = recalled.get(q.trim())
+      if (!cached) {
+        void prepareTurn(q)
         return null
+      }
       return { contextId: SOVEREIGN_CONTEXT_ID, text: cached }
     },
 
@@ -209,11 +282,12 @@ export function createSovereignSeams(
       const userText = lastUserLine(sessionMessages)
       if (!userText)
         return
+      // commitTurn itself fans intents out on the bus (single emit point)
       void client.commitTurn(
         userText,
         messageText,
         options.getSessionId?.(),
-      )
+      ).catch(() => {})
     },
 
     client,
@@ -238,4 +312,23 @@ function lastUserLine(sessionMessages: unknown[]): string | undefined {
       return text
   }
   return undefined
+}
+
+// ---- intents bus (mind → any body, plan §9/§23) ----------------------------
+
+type IntentHandler = (intents: Array<{ type: string, payload: Record<string, unknown> }>) => void
+const intentHandlers = new Set<IntentHandler>()
+
+/** Fan intents out to every subscribed body (stage adapter, webchat, …). */
+export function emitSovereignIntents(
+  intents: Array<{ type: string, payload: Record<string, unknown> }>,
+): void {
+  for (const h of intentHandlers)
+    h(intents)
+}
+
+/** Subscribe a body; returns an unsubscribe function. */
+export function onSovereignIntents(handler: IntentHandler): () => void {
+  intentHandlers.add(handler)
+  return () => intentHandlers.delete(handler)
 }

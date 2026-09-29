@@ -1,0 +1,12 @@
+{
+  "name": "@sovereign/body-adapter",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Sovereign Body Adapter (plan §23): translates the mind's semantic intents into AIRI body surfaces — emotion queue (routed by AIRI to Live2D/VRM/Spine/tachie/MMD), motion groups, and Live2D expression-store fallback. The mind never emits rig parameters; this package IS the body-side translator.",
+  "license": "Apache-2.0",
+  "exports": { ".": "./src/index.ts" },
+  "main": "src/index.ts",
+  "scripts": {
+    "check": "node ../../scripts/body_adapter_check.ts"
+  }
+}

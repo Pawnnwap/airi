@@ -34,6 +34,7 @@ import StageRenderError from './stage-render-error.vue'
 import { useDuckDb } from '../../composables/use-duck-db'
 import { useIOTraceBridge } from '../../composables/use-io-trace-bridge'
 import { initIOTracer } from '../../composables/use-io-tracer'
+import { useSovereignBody } from '../../composables/use-sovereign-body'
 import { Emotion, EMOTION_EmotionMotionName_value, EMOTION_VRMExpressionName_value, EmotionThinkMotionName } from '../../constants/emotions'
 import { live2dMotionMagicProfiles, useLive2DMotionMagic, useLive2DMotionMagicSettings } from '../../features/motions/live2d'
 import { getDefinedProvider } from '../../libs/providers/providers'
@@ -276,6 +277,17 @@ const emotionsQueue = createQueue<EmotionPayload>({
       }
     },
   ],
+})
+
+// Sovereign Body Adapter (plan §23): the mind's intents drive the body.
+// Emotions enter AIRI's own queue (routed per-renderer); motion intents set
+// the Live2D motion group; expression intents also fall back to the
+// expression store for models with named exp3 expressions.
+useSovereignBody({
+  enqueueEmotion: emotion => emotionsQueue.enqueue(emotion as EmotionPayload),
+  setCurrentMotion: (group) => {
+    currentMotion.value = { group }
+  },
 })
 
 const streamingControl = useLlmStreamingControlStore()

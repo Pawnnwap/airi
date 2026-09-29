@@ -1983,6 +1983,9 @@ importers:
       '@shikijs/markdown-it':
         specifier: 'catalog:'
         version: 4.4.3
+      '@sovereign/bridge':
+        specifier: workspace:*
+        version: link:../../packages/sovereign-bridge
       '@tresjs/cientos':
         specifier: 'catalog:'
         version: 5.8.1(@tresjs/core@5.8.3(@types/three@0.185.4)(three@0.185.1)(vue@3.5.41(typescript@6.0.3)))(three@0.185.1)(vue@3.5.41(typescript@6.0.3))
@@ -4109,6 +4112,10 @@ importers:
         specifier: workspace:*
         version: link:../plugin-protocol
 
+  packages/sovereign-body-adapter: {}
+
+  packages/sovereign-bridge: {}
+
   packages/stage-layouts:
     dependencies:
       '@moeru/eventa':
@@ -4525,6 +4532,12 @@ importers:
       '@shopify/draggable':
         specifier: 'catalog:'
         version: 1.2.1
+      '@sovereign/body-adapter':
+        specifier: workspace:*
+        version: link:../sovereign-body-adapter
+      '@sovereign/bridge':
+        specifier: workspace:*
+        version: link:../sovereign-bridge
       '@vueuse/core':
         specifier: 'catalog:'
         version: 14.4.0(vue@3.5.41(typescript@6.0.3))
