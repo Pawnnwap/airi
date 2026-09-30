@@ -58,14 +58,22 @@
         var host = location.hostname
         if (host !== 'localhost' && host !== '127.0.0.1')
           return
-        if (localStorage.getItem(KEY_DONE) === 'true' || sessionStorage.getItem(KEY_ONCE))
+        var activeModel = localStorage.getItem('settings/consciousness/active-model')
+        var alreadyOnboarded = localStorage.getItem(KEY_DONE) === 'true'
+        var alreadySeeded = !!sessionStorage.getItem(KEY_ONCE)
+        // happy path: onboarded AND a chat model pinned — nothing to do.
+        // (an EMPTY active-model with onboarding done is a broken profile
+        // from an interrupted seed — repaired below, not skipped)
+        if (alreadyOnboarded && activeModel && alreadySeeded)
           return
 
         // carry the core token handed over by the launcher (?token=…)
         var q = new URLSearchParams(location.search).get('token')
         if (q) localStorage.setItem('sovereign_token', q)
 
-        // synchronous defaults so the very first render is already configured
+        // synchronous defaults so the very first render is already configured.
+        // llama.cpp serves one model and ignores the request's model field,
+        // so 'default' is valid until the real id is pinned below.
         var providers = {
           'openai-compatible': {
             id: 'openai-compatible', definitionId: 'openai-compatible',
@@ -83,6 +91,8 @@
           'openai-compatible': true, 'openai-compatible-audio-transcription': true,
         }))
         localStorage.setItem('settings/consciousness/active-provider', 'openai-compatible')
+        if (!activeModel)
+          localStorage.setItem('settings/consciousness/active-model', 'default')
         localStorage.setItem('settings/speech/active-provider', 'kokoro-local')
         localStorage.setItem('settings/speech/active-model', 'kokoro-82m')
         localStorage.setItem('settings/speech/voice', 'af_heart')
@@ -91,7 +101,8 @@
         localStorage.setItem(KEY_SKIPPED, 'true')
 
         // async refinement: pin the exact local chat model id, then one
-        // reload so stores read the final values (guarded against loops)
+        // reload so stores read the final values (the once-flag is set on
+        // EVERY pass so neither path can reload-loop)
         sessionStorage.setItem(KEY_ONCE, '1')
         fetch('http://127.0.0.1:8081/v1/models')
           .then(r => r.json())
@@ -103,6 +114,7 @@
             }
           })
           .catch(() => {})
+      })()
       })()
     </script>
   </head>
