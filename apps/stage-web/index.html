@@ -43,78 +43,57 @@
     <script src="/assets/js/CubismSdkForWeb-5-r.3/Core/live2dcubismcore.min.js"></script>
     <script>
       ;(function () {
-        // ── Sovereign first-run bootstrap ────────────────────────────────
-        // This stage is the body of a local companion whose mind runs on
-        // 127.0.0.1 (llama.cpp :8081, whisper :8084, core :8700). A fresh
-        // browser profile would otherwise show the generic cloud onboarding
-        // and block the stage. Seed the local-first defaults ONCE, before
-        // the app bundle reads them, so she is simply THERE on first open.
-        // Nothing here is a secret: the API token still gates every call.
-        var KEY_DONE = 'onboarding/completed'
-        var KEY_SKIPPED = 'onboarding/skipped'
-        var KEY_ONCE = 'sovereign/seeded-v1'
-        // never seed on a hosted deployment — this bootstrap is for the
-        // self-hosted stage opened by the launcher on this machine only
-        var host = location.hostname
-        if (host !== 'localhost' && host !== '127.0.0.1')
+        // Sovereign local-first ensure: runs on EVERY page load, localhost
+        // only, purely synchronous and idempotent. The stage is the body of
+        // a companion whose mind runs on this machine (llama.cpp :8081,
+        // whisper :8084, core :8700); this guarantees the app never boots
+        // into "no provider/model" or the cloud onboarding, regardless of
+        // browser profile state or interrupted earlier seeds. It only fills
+        // gaps and repairs our own entries — user changes are respected.
+        if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1')
           return
-        var activeModel = localStorage.getItem('settings/consciousness/active-model')
-        var alreadyOnboarded = localStorage.getItem(KEY_DONE) === 'true'
-        var alreadySeeded = !!sessionStorage.getItem(KEY_ONCE)
-        // happy path: onboarded AND a chat model pinned — nothing to do.
-        // (an EMPTY active-model with onboarding done is a broken profile
-        // from an interrupted seed — repaired below, not skipped)
-        if (alreadyOnboarded && activeModel && alreadySeeded)
-          return
-
-        // carry the core token handed over by the launcher (?token=…)
-        var q = new URLSearchParams(location.search).get('token')
-        if (q) localStorage.setItem('sovereign_token', q)
-
-        // synchronous defaults so the very first render is already configured.
-        // llama.cpp serves one model and ignores the request's model field,
-        // so 'default' is valid until the real id is pinned below.
-        var providers = {
-          'openai-compatible': {
-            id: 'openai-compatible', definitionId: 'openai-compatible',
-            config: { api: 'chat-completions', baseUrl: 'http://127.0.0.1:8081/v1', apiKey: 'sk-local' },
-            status: 'configured', configuredBy: 'user',
-          },
-          'openai-compatible-audio-transcription': {
-            id: 'openai-compatible-audio-transcription', definitionId: 'openai-compatible-audio-transcription',
-            config: { baseUrl: 'http://127.0.0.1:8084/v1', apiKey: 'sk-local-whisper', model: 'whisper-1' },
-            status: 'configured', configuredBy: 'user',
-          },
+        var ls = window.localStorage
+        function ensure(key, value) {
+          var cur = ls.getItem(key)
+          if (cur === null || cur === '' || cur === 'null' || cur === 'undefined')
+            ls.setItem(key, value)
         }
-        localStorage.setItem('settings/providers/configured', JSON.stringify(providers))
-        localStorage.setItem('settings/providers/added', JSON.stringify({
-          'openai-compatible': true, 'openai-compatible-audio-transcription': true,
-        }))
-        localStorage.setItem('settings/consciousness/active-provider', 'openai-compatible')
-        if (!activeModel)
-          localStorage.setItem('settings/consciousness/active-model', 'default')
-        localStorage.setItem('settings/speech/active-provider', 'kokoro-local')
-        localStorage.setItem('settings/speech/active-model', 'kokoro-82m')
-        localStorage.setItem('settings/speech/voice', 'af_heart')
-        localStorage.setItem('settings/hearing/active-provider', 'openai-compatible-audio-transcription')
-        localStorage.setItem(KEY_DONE, 'true')
-        localStorage.setItem(KEY_SKIPPED, 'true')
-
-        // async refinement: pin the exact local chat model id, then one
-        // reload so stores read the final values (the once-flag is set on
-        // EVERY pass so neither path can reload-loop)
-        sessionStorage.setItem(KEY_ONCE, '1')
-        fetch('http://127.0.0.1:8081/v1/models')
-          .then(r => r.json())
-          .then((d) => {
-            var id = d && d.data && d.data[0] && d.data[0].id
-            if (id && id !== 'default') {
-              localStorage.setItem('settings/consciousness/active-model', id)
-              location.reload()
-            }
-          })
-          .catch(() => {})
-      })()
+        function ensureProvider(id, config) {
+          var raw = ls.getItem('settings/providers/configured')
+          var cfg = {}
+          try { cfg = raw ? JSON.parse(raw) : {} } catch (e) { cfg = {} }
+          var entry = cfg[id]
+          if (!entry || !entry.config || entry.config.baseUrl !== config.baseUrl) {
+            cfg[id] = { id: id, definitionId: id, config: config,
+                        status: 'configured', configuredBy: 'user' }
+          }
+          else if (entry.status !== 'configured') {
+            entry.status = 'configured'   // repair: /v1/models probe 404s on llama.cpp
+          }
+          ls.setItem('settings/providers/configured', JSON.stringify(cfg))
+          var added = {}
+          try { added = JSON.parse(ls.getItem('settings/providers/added') || '{}') } catch (e) {}
+          added[id] = true
+          ls.setItem('settings/providers/added', JSON.stringify(added))
+        }
+        // token handed over by the launcher (?token=…)
+        var q = new URLSearchParams(location.search).get('token')
+        if (q) ls.setItem('sovereign_token', q)
+        // chat: local llama.cpp. It serves one model and ignores the model
+        // field, so 'default' is always valid; a real id, once pinned
+        // (settings UI), is preserved by ensure().
+        ensureProvider('openai-compatible', {
+          api: 'chat-completions', baseUrl: 'http://127.0.0.1:8081/v1', apiKey: 'sk-local' })
+        ensureProvider('openai-compatible-audio-transcription', {
+          baseUrl: 'http://127.0.0.1:8084/v1', apiKey: 'sk-local-whisper', model: 'whisper-1' })
+        ensure('settings/consciousness/active-provider', 'openai-compatible')
+        ensure('settings/consciousness/active-model', 'default')
+        ensure('settings/speech/active-provider', 'kokoro-local')
+        ensure('settings/speech/active-model', 'kokoro-82m')
+        ensure('settings/speech/voice', 'af_heart')
+        ensure('settings/hearing/active-provider', 'openai-compatible-audio-transcription')
+        ensure('onboarding/completed', 'true')
+        ensure('onboarding/skipped', 'true')
       })()
     </script>
   </head>
