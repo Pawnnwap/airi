@@ -26,9 +26,12 @@ import type {
   VrmLoadStartTracePayload,
   VrmUpdateFrameTracePayload,
 } from '@proj-airi/stage-ui-three/trace'
+import type { SovereignRequest } from '@sovereign/bridge'
 import type { Rectangle } from 'electron'
 
 import { defineEventa, defineInvokeEventa } from '@moeru/eventa'
+
+export const sovereignCoreRequest = defineInvokeEventa<unknown, SovereignRequest>('eventa:invoke:sovereign-core:request')
 
 export const electronStartTrackMousePosition = defineInvokeEventa('eventa:invoke:electron:start-tracking-mouse-position')
 export const electronStartDraggingWindow = defineInvokeEventa('eventa:invoke:electron:start-dragging-window')

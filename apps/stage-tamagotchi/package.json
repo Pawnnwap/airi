@@ -79,6 +79,7 @@
     "@proj-airi/stage-ui-three": "workspace:^",
     "@proj-airi/ui": "workspace:^",
     "@shikijs/markdown-it": "catalog:",
+    "@sovereign/bridge": "workspace:*",
     "@tresjs/cientos": "catalog:",
     "@tresjs/core": "catalog:",
     "@unocss/reset": "catalog:",

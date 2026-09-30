@@ -148,6 +148,9 @@ function retrySourceIndexFrom(messages: ChatHistoryItem[], index: number): numbe
 export type { QueuedSendSnapshot } from '@proj-airi/core-agent'
 
 export const useChatStore = defineStore('chat', () => {
+  const sovereignProvider: GenerationProvider = {
+    generation: () => { throw new Error('Sovereign Core owns generation') },
+  }
   const runtimePrompt = useAiriRuntimePrompt()
   const authStore = useAuthStore()
   const llmStore = useLLM()
@@ -183,6 +186,7 @@ export const useChatStore = defineStore('chat', () => {
   // error-swallowed — if the core is down, AIRI runs exactly as upstream.
   const sovereign = createSovereignSeams({
     port: 8700,
+    timeoutMs: 5_000,
     getSessionId: () => activeSessionId.value,
   })
   const lastSovereignQuery = shallowRef<string>()
@@ -225,6 +229,27 @@ export const useChatStore = defineStore('chat', () => {
     context: Conversation,
     options?: StreamOptions,
   ) {
+    if (SOVEREIGN_PROFILE) {
+      const lastUserTurn = [...context.turns].reverse().find(turn => turn.type === 'user')
+      const userText = lastUserTurn?.content
+        .filter(segment => segment.type === 'text')
+        .map(segment => segment.text)
+        .join('\n')
+        .trim()
+      if (!userText)
+        throw new Error('Sovereign Core requires text for this turn')
+      const response = await sovereign.client.turn(
+        userText,
+        options?.requestCorrelation?.conversationId,
+        options?.abortSignal,
+      )
+      if (options?.abortSignal?.aborted)
+        throw options.abortSignal.reason
+      await options?.onStreamEvent?.({ type: 'text-delta', text: response.reply })
+      await options?.onStreamEvent?.({ type: 'finish' })
+      await options?.onUsage?.({ source: 'unavailable' })
+      return
+    }
     // These metrics count display records; the selected adapter owns wire message counts.
     const messages = renderConversationPreview(context)
     let llmTextLength = 0
@@ -346,6 +371,8 @@ export const useChatStore = defineStore('chat', () => {
       // Vault recall with provenance, matched against the last user message.
       // The bridge returns plain content; we type it as a ContextMessage here.
       () => {
+        if (SOVEREIGN_PROFILE)
+          return null
         const vaultContext = sovereign.runtimeContextProvider(() => lastSovereignQuery.value)()
         if (!vaultContext)
           return null
@@ -402,8 +429,9 @@ export const useChatStore = defineStore('chat', () => {
         void artistryAutonomousStore.runArtistTask(messageText, toProviderHistory(sessionMessages))
     },
     onAssistantTurnReady: ({ messageText, sessionMessages }) => {
-      // Sovereign M1: journal the closed exchange into the vault (error-swallowed).
-      sovereign.onAssistantTurnReady({ messageText, sessionMessages })
+      // Bridge mode journals AIRI's reply. Core-owned turns are already stored.
+      if (!SOVEREIGN_PROFILE)
+        sovereign.onAssistantTurnReady({ messageText, sessionMessages })
       const artistry = cardStore.activeCard?.extensions?.airi?.modules?.artistry
       if (artistry?.autonomousEnabled && artistry?.autonomousTarget === 'assistant')
         void artistryAutonomousStore.runArtistTask(messageText, toProviderHistory(sessionMessages))
@@ -450,8 +478,8 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function executeSend(payload: ChatSendPayload): Promise<ChatSendResult> {
-    const providerId = activeProvider.value
-    const modelId = activeModel.value
+    const providerId = SOVEREIGN_PROFILE ? 'sovereign-core' : activeProvider.value
+    const modelId = SOVEREIGN_PROFILE ? 'sovereign-core' : activeModel.value
     if ((!providerId || !modelId) && (providerId !== 'prompt-api'))
       throw new Error('No active chat provider or model configured')
 
@@ -459,7 +487,9 @@ export const useChatStore = defineStore('chat', () => {
       throw new Error('Failed to load the target chat session')
 
     const messageCount = chatSession.getSessionMessages(payload.sessionId).length
-    const chatProvider = await consciousnessStore.getChatProviderInstance(providerId)
+    const chatProvider = SOVEREIGN_PROFILE
+      ? sovereignProvider
+      : await consciousnessStore.getChatProviderInstance(providerId)
     if (!chatProvider)
       throw new Error(`Failed to resolve chat provider "${providerId}"`)
 

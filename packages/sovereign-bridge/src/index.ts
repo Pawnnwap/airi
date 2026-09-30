@@ -114,7 +114,12 @@ export class SovereignClient {
     assertLoopback(host)
     this.baseUrl = `http://${host}:${port}`
     this.timeoutMs = options.timeoutMs ?? 30_000
+    // Browser stages (vite dev / electron renderer) receive the token at
+    // build/dev time via VITE_SOVEREIGN_API_TOKEN; node callers pass env or
+    // the explicit option. Never hardcoded — it stays out of the repo.
     this.token = options.token
+      ?? (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_SOVEREIGN_API_TOKEN
+      ?? undefined
   }
 
   private async call<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
@@ -197,7 +202,11 @@ export class SovereignClient {
     journal: string
     intents?: Array<{ type: string, payload: Record<string, unknown> }>
   }> {
-    return this.call('POST', '/v1/turns/commit', {
+    return this.call<{
+      trace_id: string
+      journal: string
+      intents?: Array<{ type: string, payload: Record<string, unknown> }>
+    }>('POST', '/v1/turns/commit', {
       user_text: userText,
       assistant_text: assistantText,
       session_id: sessionId,
