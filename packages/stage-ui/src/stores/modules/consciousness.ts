@@ -5,12 +5,14 @@ import { refManualReset } from '@vueuse/core'
 import { defineStore } from 'pinia'
 import { computed, watch } from 'vue'
 
+import { useProviderConfigStore } from '../providers/config'
 import { useProviderStore } from '../providers/provider'
 import { useConsciousnessSettingsStore } from './consciousness-settings'
 
 export const useConsciousnessStore = defineStore('consciousness', () => {
   const providersStore = useProviderStore()
   const settingsStore = useConsciousnessSettingsStore()
+  const providerConfigStore = useProviderConfigStore()
 
   // Pinia synchronization owns live cross-window state. localStorage remains
   // durable persistence, but storage events must not reflect state back into
@@ -93,6 +95,37 @@ export const useConsciousnessStore = defineStore('consciousness', () => {
     activeCustomModelName.value = ''
   }, { flush: 'sync' })
 
+  // ── Sovereign local-first chat default (fork) ──────────────────────────
+  // This stage is the body of a companion whose chat model runs on this
+  // machine (llama.cpp behind the OpenAI-compatible provider on
+  // 127.0.0.1:8081). Several paths can leave provider/model EMPTY at send
+  // time despite persisted settings: a stale synced tab broadcasting its
+  // pre-repair snapshot (pinia-plugin-synced), the sync provider-change
+  // watcher above clearing the model, or a fresh profile. Heals in-app,
+  // idempotently, filling only EMPTY state — user selections always win.
+  // 'default' is a valid model id for llama.cpp: it serves exactly one
+  // model and ignores the request's model field.
+  function ensureLocalChatDefaults() {
+    const existing = providerConfigStore.providers['openai-compatible']
+    if (!existing?.config?.baseUrl) {
+      providerConfigStore.ensureProvider(
+        'openai-compatible',
+        'openai-compatible',
+        { api: 'chat-completions', baseUrl: 'http://127.0.0.1:8081/v1', apiKey: 'sk-local' },
+      )
+      providerConfigStore.setProviderStatus('openai-compatible', 'configured')
+      providerConfigStore.markProviderAdded('openai-compatible')
+    }
+    else if (existing.status !== 'configured') {
+      providerConfigStore.setProviderStatus('openai-compatible', 'configured')
+    }
+    if (!activeProvider.value)
+      activeProvider.value = 'openai-compatible' // sync watcher clears model; set provider first
+    if (!activeModel.value)
+      activeModel.value = 'default'
+  }
+  ensureLocalChatDefaults()
+
   async function loadModelsForProvider(provider: string) {
     if (providersStore.supportsModelListing(provider)) {
       await providersStore.fetchModelsForProvider(provider)
@@ -123,6 +156,7 @@ export const useConsciousnessStore = defineStore('consciousness', () => {
     resetModelSelection()
     activeTemperature.reset()
     activeTopP.reset()
+    ensureLocalChatDefaults() // a reset must not leave chat unconfigured
   }
 
   return {
@@ -134,6 +168,7 @@ export const useConsciousnessStore = defineStore('consciousness', () => {
     activeTopP,
     customModelName: activeCustomModelName,
     expandedDescriptions,
+    ensureLocalChatDefaults,
     modelSearchQuery,
 
     // Computed

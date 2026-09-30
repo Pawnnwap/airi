@@ -478,10 +478,20 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function executeSend(payload: ChatSendPayload): Promise<ChatSendResult> {
-    const providerId = SOVEREIGN_PROFILE ? 'sovereign-core' : activeProvider.value
-    const modelId = SOVEREIGN_PROFILE ? 'sovereign-core' : activeModel.value
-    if ((!providerId || !modelId) && (providerId !== 'prompt-api'))
-      throw new Error('No active chat provider or model configured')
+    let providerId = SOVEREIGN_PROFILE ? 'sovereign-core' : activeProvider.value
+    let modelId = SOVEREIGN_PROFILE ? 'sovereign-core' : activeModel.value
+    if ((!providerId || !modelId) && (providerId !== 'prompt-api')) {
+      // Fork: heal from local defaults before giving up. State can be empty
+      // here even with settings persisted — a stale synced tab may have
+      // broadcast its pre-repair snapshot (pinia-plugin-synced), or the
+      // provider-change watcher cleared the model. In-app heal; throws only
+      // if healing itself failed.
+      consciousnessStore.ensureLocalChatDefaults()
+      providerId = SOVEREIGN_PROFILE ? 'sovereign-core' : activeProvider.value
+      modelId = SOVEREIGN_PROFILE ? 'sovereign-core' : activeModel.value
+      if ((!providerId || !modelId) && (providerId !== 'prompt-api'))
+        throw new Error('No active chat provider or model configured')
+    }
 
     if (!await chatSession.loadSession(payload.sessionId))
       throw new Error('Failed to load the target chat session')
