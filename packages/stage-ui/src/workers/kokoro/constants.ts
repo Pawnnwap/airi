@@ -115,8 +115,10 @@ export function kokoroModelsToModelInfo(hasWebGPU: boolean, t?: (key: string) =>
  * @returns The default model to use
  */
 export function getDefaultKokoroModel(hasWebGPU: boolean, fp16Supported?: boolean): KokoroQuantization {
-  if (hasWebGPU) {
-    return fp16Supported ? 'fp16-webgpu' : 'fp32-webgpu'
-  }
-  return 'q4f16'
+  // Sovereign fork: the offline mirror under public/models/hf ships fp32
+  // only (fp16/q4 weights would still be fetched from huggingface.co,
+  // unreachable on this machine). Prefer the locally available weights so
+  // voice works with no network at all.
+  void fp16Supported
+  return hasWebGPU ? 'fp32-webgpu' : 'fp32'
 }

@@ -1,0 +1,12 @@
+# Sovereign offline model mirror. Everything except the small tokenizer/
+# config JSONs is kept out of git (the fp32 ONNX alone is 310MB, past
+# GitHub 100MB file limit). Rebuild with scripts/export-kokoro-cache.py
+# or by downloading onnx-community/Kokoro-82M-v1.0-ONNX when network allows.
+**
+!.gitignore
+!hf/
+!hf/onnx-community/
+!hf/onnx-community/Kokoro-82M-v1.0-ONNX/
+!hf/onnx-community/Kokoro-82M-v1.0-ONNX/config.json
+!hf/onnx-community/Kokoro-82M-v1.0-ONNX/tokenizer.json
+!hf/onnx-community/Kokoro-82M-v1.0-ONNX/tokenizer_config.json

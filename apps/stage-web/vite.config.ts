@@ -1,6 +1,7 @@
 import process, { cwd, env } from 'node:process'
 
 import { execSync } from 'node:child_process'
+import { createReadStream, existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 import VueI18n from '@intlify/unplugin-vue-i18n/vite'
@@ -25,6 +26,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 const stageUIAssetsRoot = resolve(join(import.meta.dirname, '..', '..', 'packages', 'stage-ui', 'src', 'assets'))
 const sharedCacheDir = resolve(join(import.meta.dirname, '..', '..', '.cache'))
+const ortRuntimeDir = resolve(join(import.meta.dirname, 'public', 'models', 'ort'))
 
 function hasFlagEnableMkcert(): boolean {
   if (process.argv.includes('--mkcert')) {
@@ -120,6 +122,30 @@ export default defineConfig({
   },
 
   plugins: [
+    // Sovereign offline model mirror: onnxruntime's emscripten glue is
+    // dynamically import()ed with a `?import` query appended by Vite's import
+    // analysis, and Vite answers 500 for public-dir files going through the
+    // module pipeline. Serve the ort runtime straight from disk instead so
+    // the kokoro worker can load it without touching any CDN.
+    {
+      name: 'sovereign-ort-runtime',
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          const match = (req.url || '').match(/^\/models\/ort\/([\w.-]+)/)
+          if (!match)
+            return next()
+          const file = resolve(join(ortRuntimeDir, match[1]))
+          if (!file.startsWith(ortRuntimeDir) || !existsSync(file))
+            return next()
+          res.setHeader('Content-Type', file.endsWith('.mjs')
+            ? 'text/javascript'
+            : file.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream')
+          res.setHeader('Cache-Control', 'no-cache')
+          createReadStream(file).pipe(res)
+        })
+      },
+    },
+
     ...(
       hasFlagEnableMkcert()
         ? [Mkcert((() => {

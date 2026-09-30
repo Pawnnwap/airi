@@ -86,6 +86,9 @@
           api: 'chat-completions', baseUrl: 'http://127.0.0.1:8081/v1', apiKey: 'sk-local' })
         ensureProvider('openai-compatible-audio-transcription', {
           baseUrl: 'http://127.0.0.1:8084/v1', apiKey: 'sk-local-whisper', model: 'whisper-1' })
+        // kokoro-local must be CONFIGURED or the inference preload skips the
+        // TTS model entirely and voice silently never loads
+        ensureProvider('kokoro-local', { voiceId: 'af_heart' })
         ensure('settings/consciousness/active-provider', 'openai-compatible')
         ensure('settings/consciousness/active-model', 'default')
         ensure('settings/speech/active-provider', 'kokoro-local')

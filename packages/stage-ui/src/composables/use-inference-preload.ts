@@ -10,6 +10,7 @@
  */
 
 import { detectWebGPU, getCachedWebGPUCapabilities } from '@proj-airi/stage-shared/webgpu'
+import { watch } from 'vue'
 
 import { getKokoroAdapter } from '../libs/inference/adapters/kokoro'
 import { useProviderConfigStore } from '../stores/providers/config'
@@ -27,15 +28,10 @@ export function useInferencePreload(options: UseInferencePreloadOptions = {}) {
   const preload = useModelPreload({ delayMs })
 
   /**
-   * Check provider configuration and schedule preloads for any
-   * configured local inference providers.
-   *
-   * Should be called once after app stores are initialized.
+   * Schedule preloads for any configured local inference providers.
+   * Returns true when at least one task was scheduled.
    */
-  async function triggerPreload(): Promise<void> {
-    // Ensure WebGPU capabilities are cached for downstream use
-    await detectWebGPU()
-
+  function scheduleTasks(): boolean {
     const providerStore = useProviderConfigStore()
     const tasks: { modelId: string, loader: (signal: AbortSignal) => Promise<void> }[] = []
 
@@ -69,7 +65,39 @@ export function useInferencePreload(options: UseInferencePreloadOptions = {}) {
 
     if (tasks.length > 0) {
       preload.schedulePreload(tasks)
+      return true
     }
+    return false
+  }
+
+  /**
+   * Check provider configuration and schedule preloads.
+   *
+   * The provider-config store hydrates asynchronously (providersQuery), so
+   * the first check can race it and see an empty store. If nothing was
+   * schedulable yet, watch for the store to land and try once more — a
+   * one-shot preload that missed its gate would otherwise leave voice
+   * silently unconfigured forever.
+   */
+  async function triggerPreload(): Promise<void> {
+    // Ensure WebGPU capabilities are cached for downstream use
+    await detectWebGPU()
+
+    if (scheduleTasks())
+      return
+
+    let giveUp: ReturnType<typeof setTimeout> | undefined
+    const stop = watch(
+      () => useProviderConfigStore().configuredProviders['kokoro-local'],
+      (ready) => {
+        if (ready) {
+          stop()
+          clearTimeout(giveUp)
+          scheduleTasks()
+        }
+      },
+    )
+    giveUp = setTimeout(stop, 60_000)
   }
 
   return {

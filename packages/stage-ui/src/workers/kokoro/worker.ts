@@ -16,11 +16,70 @@ import type {
 } from '../../libs/inference/protocol'
 import type { VoiceKey, Voices } from './types'
 
+// ---------------------------------------------------------------------------
+// Sovereign local-first model loading (fork)
+//
+// kokoro-js + @huggingface/transformers fetch the ONNX weights, tokenizer and
+// ort-wasm runtime from huggingface.co / a CDN at runtime. On a machine
+// without access to those hosts the voice dies on first use. Everything the
+// worker needs is mirrored under this origin (apps/stage-web/public/models),
+// so point transformers at the local mirror first:
+//   - model/tokenizer: env.localModelPath + <repo>/<file>  (fetched before
+//     the remote, and our fp32 mirror is complete, so the remote is never
+//     reached in the default configuration)
+//   - ort wasm runtime: wasmPaths below
+// Voices are fetched by kokoro-js from a HARDCODED huggingface URL (not
+// configurable through env). It checks the 'kokoro-voices' Cache API first,
+// so we pre-seed that cache from the local mirror under the exact remote URL
+// keys — kokoro-js then never touches the network.
+// ---------------------------------------------------------------------------
+import { env } from '@huggingface/transformers'
 import { errorMessageFromValue } from '@proj-airi/stage-shared'
 import { KokoroTTS } from 'kokoro-js'
 
 import { MODEL_IDS, MODEL_NAMES } from '../../libs/inference/constants'
 import { classifyError, isRecoverable } from '../../libs/inference/protocol'
+
+env.localModelPath = '/models/hf/'
+if (env.backends.onnx?.wasm)
+  env.backends.onnx.wasm.wasmPaths = '/models/ort/'
+
+const VOICE_URL_PREFIX = 'https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/'
+const LOCAL_VOICE_BASE = '/models/hf/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/'
+const LOCAL_VOICE_LIST = '/models/hf/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/index.json'
+
+let voicesSeeded: Promise<void> | null = null
+
+async function seedLocalVoices(): Promise<void> {
+  if (typeof caches === 'undefined')
+    return
+  const cache = await caches.open('kokoro-voices')
+  let names: string[] = []
+  try {
+    const res = await fetch(LOCAL_VOICE_LIST)
+    if (res.ok)
+      names = await res.json()
+  }
+  catch { /* fall back to the default voice only */ }
+  if (!names.length)
+    names = ['af_heart']
+  await Promise.all(names.map(async (name) => {
+    const url = `${VOICE_URL_PREFIX + name}.bin`
+    if (await cache.match(url))
+      return
+    const res = await fetch(`${LOCAL_VOICE_BASE + name}.bin`)
+    if (res.ok)
+      await cache.put(url, new Response(await res.arrayBuffer(), { headers: res.headers }))
+  }))
+}
+
+function ensureVoicesSeeded(): Promise<void> {
+  voicesSeeded ??= seedLocalVoices().catch((e) => {
+    console.warn('[kokoro] voice cache seeding failed:', e)
+    voicesSeeded = null // allow a retry on the next load
+  }) as Promise<void>
+  return voicesSeeded
+}
 
 // ---------------------------------------------------------------------------
 // Inference-specific input/output types
@@ -156,6 +215,7 @@ async function loadModel(request: LoadModelRequest): Promise<void> {
     let lastError: unknown
     for (const attempt of attempts) {
       try {
+        await ensureVoicesSeeded() // kokoro-js reads voices from its cache
         ttsModel = await KokoroTTS.from_pretrained(
           MODEL_IDS.KOKORO,
           {
